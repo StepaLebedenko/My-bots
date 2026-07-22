@@ -106,9 +106,11 @@ def handle_message(message):
 
         bot.send_message(user_id, bot_reply, parse_mode="Markdown")
 
-    except Exception as e:
-        error_msg = "⚠️ Произошла ошибка при обращении к DeepSeek. Попробуйте еще раз или введите `/reset`."
-        bot.send_message(user_id, error_msg)
+    except Exception as e:# Выводим реальную ошибку прямо в лог и в чат для отладки
+        print(f"Ошибка DeepSeek: {e}")
+        error_msg = f"⚠️ Ошибка API:\n`{e}`"
+        bot.send_message(user_id, error_msg, parse_mode="Markdown")
+ 
 
 if __name__ == "__main__":
     bot.infinity_polling()
