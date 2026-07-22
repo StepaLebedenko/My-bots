@@ -1,78 +1,53 @@
-import asyncio
 import os
-from aiogram import Bot, Dispatcher, types
-from aiogram.filters import CommandStart
-from aiohttp import web
-from dotenv import load_dotenv
-from openai import AsyncOpenAI
+import urllib.parse
+import logging
+from telegram import Update
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
-load_dotenv()
-
-TELEGRAM_BOT_TOKEN = "8862473984:AAFrlUGDAjDn4wb_QDHV8_xI9MTqjCbHiNg" 
-OPENROUTER_API_KEY = "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" 
-MODEL_NAME = "deepseek/deepseek-r1:free"
-
-bot = Bot(token=TELEGRAM_BOT_TOKEN)
-dp = Dispatcher()
-ai_client = AsyncOpenAI(
-    base_url="https://openrouter.ai/api/v1", api_key=OPENROUTER_API_KEY
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
 )
 
-user_history = {}
+TELEGRAM_TOKEN = "8862473984:AAFrlUGDAjDn4wb_QDHV8_xI9MTqjCbHiNg" 
 
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "👋 Привет! Я бот для генерации изображений.\n\n"
+        "Отправь мне текстовое описание (лучше на английском), и я создам картинку!"
+    )
 
-# --- ФЕЙКОВЫЙ ВЕБ-СЕРВЕР ДЛЯ RENDER ---
-async def handle_healthcheck(request):
-    return web.Response(text="Bot is running!")
+async def generate_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    prompt = update.message.text.strip()
+    if not prompt:
+        return
 
-
-async def start_web_server():
-    app = web.Application()
-    app.router.add_get("/", handle_healthcheck)
-    runner = web.AppRunner(app)
-    await runner.setup()
-    # Render передает номер порта в переменную PORT
-    port = int(os.environ.get("PORT", 10000))
-    site = web.TCPSite(runner, "0.0.0.0", port)
-    await site.start()
-
-
-# --------------------------------------
-
-
-@dp.message(CommandStart())
-async def start_handler(message: types.Message):
-    await message.answer("Привет! Я бот на базе OpenRouter.")
-
-
-@dp.message()
-async def chat_handler(message: types.Message):
-    user_id = message.from_user.id
-    if user_id not in user_history:
-        user_history[user_id] = []
-
-    user_history[user_id].append({"role": "user", "content": message.text})
-    await bot.send_chat_action(chat_id=message.chat.id, action="typing")
+    status_message = await update.message.reply_text("🎨 Генерирую изображение, подождите...")
 
     try:
-        response = await ai_client.chat.completions.create(
-            model=MODEL_NAME, messages=user_history[user_id]
+        encoded_prompt = urllib.parse.quote(prompt)
+        image_url = f"https://image.pollinations.ai/prompt/{encoded_prompt}?model=flux&width=1024&height=1024&nologo=true"
+
+        await update.message.reply_photo(
+            photo=image_url,
+            caption=f"✨ **Запрос:** {prompt}",
+            parse_mode="Markdown"
         )
-        bot_response = response.choices[0].message.content
-        user_history[user_id].append(
-            {"role": "assistant", "content": bot_response}
-        )
-        await message.answer(bot_response)
+        await status_message.delete()
+
     except Exception as e:
-        await message.answer(f"Ошибка: {e}")
+        logging.error(f"Ошибка при генерации: {e}")
+        await status_message.edit_text("❌ Произошла ошибка при создании изображения. Попробуйте ещё раз.")
 
+def main():
+    if not TELEGRAM_TOKEN:
+        raise ValueError("Переменная окружения TELEGRAM_TOKEN не задана!")
 
-async def main():
-    # Запускаем и веб-сервер для Render, и сам поллинг бота
-    await start_web_server()
-    print("Бот запущен!")
-    await dp.start_polling(bot)
+    app = Application.builder().token(TELEGRAM_TOKEN).build()
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, generate_image))
 
+    app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
