@@ -1,4 +1,5 @@
 import os
+import asyncio
 import urllib.parse
 import logging
 from telegram import Update
@@ -39,7 +40,7 @@ async def generate_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logging.error(f"Ошибка при генерации: {e}")
         await status_message.edit_text("❌ Произошла ошибка при создании изображения. Попробуйте ещё раз.")
 
-def main():
+async def main_async():
     if not TELEGRAM_TOKEN:
         raise ValueError("Переменная окружения TELEGRAM_TOKEN не задана!")
 
@@ -47,7 +48,12 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, generate_image))
 
-    app.run_polling(drop_pending_updates=True)
+    async with app:
+        await app.initialize()
+        await app.start()
+        await app.updater.start_polling(drop_pending_updates=True)
+        # Держим бота запущенным
+        await asyncio.Event().wait()
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main_async())
