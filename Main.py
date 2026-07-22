@@ -1,93 +1,59 @@
-import os
-import random
-import threading
-from flask import Flask
-import telebot
-from google import genai
-from google.genai import types
+import asyncio
+import logging
+from aiogram import Bot, Dispatcher, types
+from aiogram.filters import CommandStart
+from openai import AsyncOpenAI
 
-# 1. Заглушка веб-сервера для бесплатного Web Service на Render
-app = Flask(__name__)
+# Настройка логирования
+logging.basicConfig(level=logging.INFO)
 
-@app.route('/')
-def home():
-    return "Bot is alive!"
+# Конфигурация ключей
+TELEGRAM_BOT_TOKEN = "8862473984:AAFrlUGDAjDn4wb_QDHV8_xI9MTqjCbHiNg"
+DEEPSEEK_API_KEY = "sk-963bbd220c9a44d69d735664e490934b"
 
-def run_flask():
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host="0.0.0.0", port=port)
+# Инициализация клиентов
+bot = Bot(token=TELEGRAM_BOT_TOKEN)
+dp = Dispatcher()
 
-# Запускаем веб-сервер в отдельном потоке
-threading.Thread(target=run_flask, daemon=True).start()
-
-# 2. Вставь свои токены в кавычки ""
-TELEGRAM_TOKEN = "8862473984:AAFrlUGDAjDn4wb_QDHV8_xI9MTqjCbHiNg" 
-GEMINI_API_KEY = "AQ.Ab8RN6J72RMbTCr-XI3IXNYGjVTIsTeVCR5gYik1pQQSa8ctvA" 
-
-bot = telebot.TeleBot(TELEGRAM_TOKEN)
-ai_client = genai.Client(api_key=GEMINI_API_KEY)
-
-user_chats = {}
-
-GREETINGS = [
-    "Здравствуйте! Я ваш персональный ИИ-ассистент. Чем я могу вам помочь?",
-    "Приветствую! Готов ответить на ваши вопросы и помочь с решением задач. Что вас интересует?",
-    "Здравствуйте! На связи ваш интеллектуальный помощник. Задайте ваш вопрос.",
-    "Приветствую! Я готов к работе. Напишите, какую задачу необходимо решить."
-]
-
-SYSTEM_INSTRUCTION = (
-    "Ты — профессиональный, компетентный и вежливый ИИ-ассистент. "
-    "Твоя задача — давать точные, структурированные, объективные и исчерпывающие ответы на русском языке. "
-    "Отвечай строго по существу, без использования сленга, юмора, шуток и лишней эмоциональности. "
-    "Для удобства чтения используй четкое форматирование: списки, выделения ключевых мыслей жирным шрифтом и абзацы."
+# DeepSeek использует клиент OpenAI, но с указанием своего base_url
+client = AsyncOpenAI(
+    api_key=DEEPSEEK_API_KEY,
+    base_url="https://api.deepseek.com"
 )
 
-def get_or_create_chat(user_id):
-    if user_id not in user_chats:
-        user_chats[user_id] = ai_client.chats.create(
-            model="gemini-2.5-flash",
-            config=types.GenerateContentConfig(
-                system_instruction=SYSTEM_INSTRUCTION,
-                temperature=0.3,
-            )
-        )
-    return user_chats[user_id]
+# Обработчик команды /start
+@dp.message(CommandStart())
+async def cmd_start(message: types.Message):
+    await message.answer("Привет! Напиши мне любой вопрос, и я отвечу с помощью DeepSeek.")
 
-@bot.message_handler(commands=['start'])
-def send_welcome(message):
-    user_id = message.chat.id
-    if user_id in user_chats:
-        del user_chats[user_id]
-        
-    get_or_create_chat(user_id)
-    
-    welcome_text = random.choice(GREETINGS)
-    welcome_text += "\n\n💡 *Примечание:* Чтобы очистить историю текущего диалога и начать обсуждение заново, воспользуйтесь командой `/reset`."
-    bot.send_message(user_id, welcome_text, parse_mode="Markdown")
-
-@bot.message_handler(commands=['reset'])
-def reset_memory(message):
-    user_id = message.chat.id
-    if user_id in user_chats:
-        del user_chats[user_id]
-    get_or_create_chat(user_id)
-    bot.reply_to(message, "🧹 *История диалога успешно очищена.* Теперь вы можете начать обсуждение с чистого листа.", parse_mode="Markdown")
-
-@bot.message_handler(func=lambda message: True)
-def handle_message(message):
-    user_id = message.chat.id
-    chat = get_or_create_chat(user_id)
-    
-    bot.send_chat_action(user_id, 'typing')
+# Обработчик всех текстовых сообщений
+@dp.message()
+async def handle_message(message: types.Message):
+    # Отправляем плашку "печатает...", чтобы пользователь видел активность
+    await bot.send_chat_action(chat_id=message.chat.id, action="typing")
 
     try:
-        response = chat.send_message(message.text)
-        bot.send_message(user_id, response.text, parse_mode="Markdown")
+        # Запрос к API DeepSeek
+        response = await client.chat.completions.create(
+            model="deepseek-chat",  # Для логических задач можно использовать "deepseek-reasoner"
+            messages=[
+                {"role": "system", "content": "Ты полезный и вежливый ассистент."},
+                {"role": "user", "content": message.text}
+            ],
+            stream=False
+        )
+
+        # Получаем ответ и отправляем пользователю
+        answer = response.choices[0].message.content
+        await message.answer(answer)
 
     except Exception as e:
-        error_msg = "⚠️ Произошла ошибка при обработке вашего запроса. Пожалуйста, попробуйте повторить отправку или используйте команду `/reset`."
-        bot.send_message(user_id, error_msg)
+        logging.error(f"Ошибка при запросе к DeepSeek: {e}")
+        await message.answer("Произошла ошибка при обработке запроса. Попробуйте позже.")
+
+# Запуск бота
+async def main():
+    await dp.start_polling(bot)
 
 if __name__ == "__main__":
-    bot.infinity_polling()
+    asyncio.run(main())
