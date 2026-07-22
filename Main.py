@@ -5,8 +5,8 @@ from google import genai
 from google.genai import types
 
 # 1. Вставь свои токены прямо в кавычки:
-TELEGRAM_TOKEN = 8862473984:AAFrlUGDAjDn4wb_QDHV8_xI9MTqjCbHiNg
-GEMINI_API_KEY = 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
+TELEGRAM_TOKEN = "8862473984:AAFrlUGDAjDn4wb_QDHV8_xI9MTqjCbHiNg" 
+GEMINI_API_KEY = "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"
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 ai_client = genai.Client(api_key=GEMINI_API_KEY)
