@@ -1,53 +1,81 @@
 import asyncio
 import logging
+import os
 import random
 from aiogram import Bot, Dispatcher, F, types
 from aiogram.filters import Command
 from aiogram.utils.keyboard import InlineKeyboardBuilder
+from aiohttp import web
 
-BOT_TOKEN = "8862473984:AAFrlUGDAjDn4wb_QDHV8_xI9MTqjCbHiNg"  # Вставь токен от BotFather
+# --- НАСТРОЙКИ ТОКЕНА ---
+# Берём токен из Environment Variables на Render. Если локально — подставит fallback.
+BOT_TOKEN = "8862473984:AAFrlUGDAjDn4wb_QDHV8_xI9MTqjCbHiNg" 
 
 logging.basicConfig(level=logging.INFO)
-bot = Bot(token=BOT_TOKEN)
+bot = Bot(token=BOT_TOKEN.strip())  # strip() защищает от случайных пробелов
 dp = Dispatcher()
 
+# --- ВЕБ-СЕРВЕР ДЛЯ БЕСПЛАТНОГО ТАРИФА RENDER (WEB SERVICE) ---
+async def handle_ping(request):
+    return web.Response(text="Bot is live and running!")
+
+async def start_web_server():
+    """Запускает фейковый веб-порт, который ищет Render"""
+    app = web.Application()
+    app.router.add_get("/", handle_ping)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    
+    # Render автоматически передаёт порт через переменную PORT
+    port = int(os.environ.get("PORT", 8080))
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+    print(f"🌐 Веб-сервер успешно запущен на порту {port}")
+
 # --- ХРАНИЛИЩА СОСТОЯНИЙ ИГР ---
-# 1. Активные вопросы викторины {chat_id: "ответ"}
-active_quizzes = {}
+active_quizzes = {}  # {chat_id: ["ответ1", "ответ2"]}
+rps_games = {}       # {msg_id: game_data}
 
-# 2. Игры Камень-Ножницы-Бумага {msg_id: {"p1": id, "p2": id, "p1_move": str, "p2_move": str, "p1_name": str, "p2_name": str}}
-rps_games = {}
-
-# 3. База вопросов для викторины
+# База вопросов для викторины
 QUIZ_QUESTIONS = [
     {"q": "В какой игре главный герой — Геральт из Ривии?", "a": ["ведьмак", "thewitcher", "witcher"]},
     {"q": "Какая компания создала консоль PlayStation?", "a": ["sony", "сони"]},
     {"q": "Как называется популярный песочный мир из кубов?", "a": ["minecraft", "майнкрафт"]},
     {"q": "В каком году вышла игра GTA V?", "a": ["2013"]},
     {"q": "Как зовут водопроводчика в красной кепке из игр Nintendo?", "a": ["марио", "mario"]},
+    {"q": "Как называется гоночная серия игр от Microsoft?", "a": ["forza", "forza horizon"]},
 ]
 
+# --- КОМАНДА /START И ПОМОЩЬ ---
+@dp.message(Command("start", "help"))
+async def cmd_start(message: types.Message):
+    await message.answer(
+        "🎮 **Игровой Бот для Групповых Чатов!**\n\n"
+        "**Команды для игр:**\n"
+        "• `/quiz` — запустить викторину на скорость для всего чата 🧠\n"
+        "• `/rps` (ответом на сообщение) — дуэль в Камень-Ножницы-Бумага ✂️\n"
+        "• `/mine` — командный Сапёр / Минное поле 💣",
+        parse_mode="Markdown"
+    )
 
-# --- ИГРА 1: ВИКТОРИНА ДЛЯ ВСЕГО ЧАТА ---
-
+# --- ИГРА 1: ВИКТОРИНА ---
 @dp.message(Command("quiz"))
 async def cmd_quiz(message: types.Message):
     chat_id = message.chat.id
     if chat_id in active_quizzes:
-        await message.reply("⚠️ В чате уже идет викторина! Ответьте на текущий вопрос.")
+        await message.reply("⚠️ В чате уже идет викторина! Напишите ответ на текущий вопрос.")
         return
 
     item = random.choice(QUIZ_QUESTIONS)
     active_quizzes[chat_id] = item["a"]
 
     await message.answer(
-        f"🧠 **ВИКТОРИНА ДЛЯ ВСЕХ!**\n\n"
+        f"🧠 **ВИКТОРИНА!**\n\n"
         f"❓ **Вопрос:** {item['q']}\n\n"
-        f"👇 *Кто первым напишет правильный ответ прямо в чат, тот и победил!*",
+        f"👇 *Кто первым напишет правильный ответ в чат — побеждает!*",
         parse_mode="Markdown"
     )
 
-# Проверка ответов на викторину в сообщениях чата
 @dp.message(~F.text.startswith("/"))
 async def check_quiz_answer(message: types.Message):
     chat_id = message.chat.id
@@ -60,13 +88,11 @@ async def check_quiz_answer(message: types.Message):
     if any(ans == user_text for ans in correct_answers):
         del active_quizzes[chat_id]
         await message.reply(
-            f"🎉 **ПРАВИЛЬНО!** [{message.from_user.first_name}](tg://user?id={message.from_user.id}) дает верный ответ и получает 1 очко!",
+            f"🎉 **ПРАВИЛЬНО!** [{message.from_user.first_name}](tg://user?id={message.from_user.id}) дает верный ответ!",
             parse_mode="Markdown"
         )
 
-
-# --- ИГРА 2: КАМЕНЬ-НОЖНИЦЫ-БУМАГА (ДУЭЛЬ НА КНОПКАХ) ---
-
+# --- ИГРА 2: КАМЕНЬ-НОЖНИЦЫ-БУМАГА ---
 @dp.message(Command("rps"))
 async def cmd_rps(message: types.Message):
     if not message.reply_to_message or message.reply_to_message.from_user.is_bot:
@@ -81,15 +107,15 @@ async def cmd_rps(message: types.Message):
         return
 
     builder = InlineKeyboardBuilder()
-    builder.button(text="🪨 Камень", callback_data="rps_move_rock")
-    builder.button(text="✂️ Ножницы", callback_data="rps_move_scissors")
-    builder.button(text="📄 Бумага", callback_data="rps_move_paper")
+    builder.button(text="🪨 Камень", callback_data="rps_rock")
+    builder.button(text="✂️ Ножницы", callback_data="rps_scissors")
+    builder.button(text="📄 Бумага", callback_data="rps_paper")
     builder.adjust(3)
 
     msg = await message.answer(
         f"⚔️ **Камень-Ножницы-Бумага!**\n\n"
         f"🎮 Игроки: {p1.first_name} VS {p2.first_name}\n"
-        f"👇 Нажмите кнопки ниже, чтобы сделать скрытый ход!",
+        f"👇 Сделайте скрытый ход кнопками ниже:",
         reply_markup=builder.as_markup()
     )
 
@@ -99,7 +125,7 @@ async def cmd_rps(message: types.Message):
         "p1_move": None, "p2_move": None
     }
 
-@dp.callback_query(F.data.startswith("rps_move_"))
+@dp.callback_query(F.data.startswith("rps_"))
 async def handle_rps_move(callback: types.CallbackQuery):
     msg_id = callback.message.message_id
     if msg_id not in rps_games:
@@ -113,7 +139,7 @@ async def handle_rps_move(callback: types.CallbackQuery):
         await callback.answer("Вы не участник этой дуэли!", show_alert=True)
         return
 
-    move = callback.data.replace("rps_move_", "")
+    move = callback.data.replace("rps_", "")
 
     if user_id == game["p1"]:
         if game["p1_move"]:
@@ -128,7 +154,6 @@ async def handle_rps_move(callback: types.CallbackQuery):
 
     await callback.answer("Ваш ход принят! 🤫")
 
-    # Если оба сделали ходы — подводим итоги
     if game["p1_move"] and game["p2_move"]:
         m1, m2 = game["p1_move"], game["p2_move"]
         moves_map = {"rock": "🪨 Камень", "scissors": "✂️ Ножницы", "paper": "📄 Бумага"}
@@ -147,12 +172,9 @@ async def handle_rps_move(callback: types.CallbackQuery):
         await callback.message.edit_text(res_text, parse_mode="Markdown")
         del rps_games[msg_id]
 
-
-# --- ИГРА 3: КОМАНДНЫЙ «САПЁР» (МИННОЕ ПОЛЕ ДЛЯ ЧАТА) ---
-
+# --- ИГРА 3: МИННОЕ ПОЛЕ ---
 @dp.message(Command("mine"))
 async def cmd_mine(message: types.Message):
-    """Поле 3x3. На одной из клеток мина!"""
     bomb_index = random.randint(0, 8)
     builder = InlineKeyboardBuilder()
 
@@ -162,8 +184,8 @@ async def cmd_mine(message: types.Message):
 
     await message.answer(
         "💣 **КОМАНДНЫЙ САПЁР!**\n\n"
-        "На поле 3x3 спрятана **одна мина** 💣, а в остальных клетках — золото 🪙!\n"
-        "Нажимайте кнопки по очереди. Кто наткнется на мину — проиграл!",
+        "На поле спрятана **одна мина** 💣!\n"
+        "Нажимайте кнопки по очереди. Кто наступит на мину — подорвётся!",
         reply_markup=builder.as_markup()
     )
 
@@ -177,26 +199,27 @@ async def handle_minefield(callback: types.CallbackQuery):
     if cell_idx == bomb_idx:
         await callback.answer("💥 БУУУМ! ТЫ ВЗОРВАЛСЯ!", show_alert=True)
         await callback.message.edit_text(
-            f"💥 **ВЗРЫВ!**\n\n"
-            f"💀 Игрок **{player_name}** наступил на мину и подорвал весь отряд!\n"
-            f"Игра окончена."
+            f"💥 **ВЗРЫВ!**\n\n💀 Игрок **{player_name}** наступил на мину! Игра окончена."
         )
     else:
-        await callback.answer("🪙 Безопасно! Найдено золото!")
-        # Обновляем клавиатуру, отключая нажатую кнопку
+        await callback.answer("🪙 Безопасно!")
         reply_markup = callback.message.reply_markup
         for row in reply_markup.inline_keyboard:
             for btn in row:
                 if btn.callback_data == callback.data:
                     btn.text = "🪙"
                     btn.callback_data = "disabled"
-        
         await callback.message.edit_reply_markup(reply_markup=reply_markup)
 
-
+# --- ТОЧКА ВХОДА ---
 async def main():
-    print("🚀 Коллективный игровой бот запущен!")
+    # 1. Запускаем фейк-вебсервер для удовлетворения проверок Render Web Service
+    await start_web_server()
+    
+    # 2. Запуск бота
+    print("🚀 Игровой бот запущен!")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
     asyncio.run(main())
+ 
